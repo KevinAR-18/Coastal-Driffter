@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Coastal Driffter - Real-Time RTK GNSS & IMU Dashboard</title>
+  <title>Coastal Driffter - Dual-GNSS Real-Time RTK Dashboard</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     :root {
       --bg-dark: #0f172a;
-      --card-bg: rgba(30, 41, 59, 0.85);
+      --card-bg: rgba(30, 41, 59, 0.88);
       --accent-blue: #38bdf8;
       --accent-green: #22c55e;
       --accent-yellow: #eab308;
@@ -25,7 +25,7 @@
       position: absolute; top: 20px; right: 20px; z-index: 1000;
       background: var(--card-bg); backdrop-filter: blur(12px);
       padding: 24px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.1);
-      box-shadow: 0 10px 30px rgba(0,0,0,0.5); width: 350px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5); width: 360px;
       max-height: calc(100vh - 40px); overflow-y: auto;
     }
 
@@ -67,7 +67,7 @@
 
   <div id="panel">
     <h2>🚤 Coastal Driffter</h2>
-    <div class="subtitle">STM32 RTK GNSS & IMU Dashboard</div>
+    <div class="subtitle">Dual-GNSS (Base & Rover Tracker)</div>
 
     <button id="btnConnect" class="btn btn-primary">🔌 Hubungkan ke Base (USB Serial)</button>
 
@@ -89,13 +89,20 @@
         <span id="txtFix" class="badge rtk-single">DISCONNECTED</span>
       </div>
       <div class="stat-row"><span>Log Points:</span><b id="txtPointCount">0 pts</b></div>
-      <div class="stat-row"><span>Total Jarak:</span><b id="txtDistance">0.00 m</b></div>
+      <div class="stat-row"><span>Jarak Baseline Base-Rover:</span><b id="txtBaselineDist">0.00 m</b></div>
+      <div class="stat-row"><span>Total Jarak Rover:</span><b id="txtDistance">0.00 m</b></div>
     </div>
 
     <div class="stat-section">
-      <div class="section-title">Posisi GNSS Presisi</div>
-      <div class="stat-row"><span>Latitude:</span><b id="txtLat">-</b></div>
-      <div class="stat-row"><span>Longitude:</span><b id="txtLon">-</b></div>
+      <div class="section-title">📌 Posisi Live Base Station</div>
+      <div class="stat-row"><span>Base Lat:</span><b id="txtBaseLat">-6.1753924</b></div>
+      <div class="stat-row"><span>Base Lon:</span><b id="txtBaseLon">106.8271532</b></div>
+    </div>
+
+    <div class="stat-section">
+      <div class="section-title">🚤 Posisi Moving Rover</div>
+      <div class="stat-row"><span>Rover Lat:</span><b id="txtLat">-</b></div>
+      <div class="stat-row"><span>Rover Lon:</span><b id="txtLon">-</b></div>
       <div class="stat-row"><span>Altitude:</span><b id="txtAlt">-</b></div>
       <div class="stat-row"><span>Akurasi (hAcc):</span><b id="txtAcc">-</b></div>
     </div>
@@ -112,20 +119,21 @@
   <div id="map"></div>
 
   <script>
-    // Posisi Default (Base Station)
-    const basePos = [-6.17539, 106.82715];
+    // Posisi Awal Default
+    let basePos = [-6.1753924, 106.8271532];
     const map = L.map('map').setView(basePos, 18);
 
     // Leaflet Tile Layer (Dark Map)
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 21,
-      attribution: '© OpenStreetMap contributors | Coastal Driffter RTK System'
+      attribution: '© OpenStreetMap contributors | Coastal Driffter Dual-GNSS System'
     }).addTo(map);
 
-    // Markers & Polyline Track
-    const baseMarker = L.marker(basePos).addTo(map).bindPopup('<b>📌 Base Station (Fixed Point)</b>').openPopup();
-    let roverMarker = L.marker(basePos).addTo(map).bindPopup('<b>🚤 Coastal Drifter Unit</b>');
+    // Markers & Lines
+    const baseMarker = L.marker(basePos).addTo(map).bindPopup('<b>📌 Base Station (Live Fixed GNSS)</b>').openPopup();
+    let roverMarker = L.marker(basePos).addTo(map).bindPopup('<b>🚤 Coastal Drifter Moving Unit</b>');
     let pathPolyline = L.polyline([], { color: '#38bdf8', weight: 4, opacity: 0.85 }).addTo(map);
+    let baselineLine = L.polyline([basePos, basePos], { color: '#eab308', weight: 2, dashArray: '6, 6' }).addTo(map);
 
     // Recording State Data
     let recordedLogs = [];
@@ -179,40 +187,52 @@
     }
 
     function updateDashboard(data) {
-      const lat = data.lat;
-      const lon = data.lon;
-      const newPos = [lat, lon];
+      // Parse Dual-GNSS format or Flat format
+      const baseData = data.base || { lat: basePos[0], lon: basePos[1] };
+      const roverData = data.rover || data;
 
-      roverMarker.setLatLng(newPos);
-      pathPolyline.addLatLng(newPos);
-      map.panTo(newPos);
+      // 1. Update Base Station Marker Position
+      basePos = [baseData.lat, baseData.lon];
+      baseMarker.setLatLng(basePos);
+      document.getElementById('txtBaseLat').innerText = baseData.lat.toFixed(7);
+      document.getElementById('txtBaseLon').innerText = baseData.lon.toFixed(7);
 
-      // Accumulate Distance
+      // 2. Update Moving Rover Marker & Trajectory Line
+      const roverPos = [roverData.lat, roverData.lon];
+      roverMarker.setLatLng(roverPos);
+      pathPolyline.addLatLng(roverPos);
+      map.panTo(roverPos);
+
+      // 3. Update Baseline Connection Line (Base -> Rover)
+      baselineLine.setLatLngs([basePos, roverPos]);
+      const baselineDist = calculateDistance(basePos[0], basePos[1], roverPos[0], roverPos[1]);
+      document.getElementById('txtBaselineDist').innerText = baselineDist < 1000 ? 
+        baselineDist.toFixed(2) + ' m' : (baselineDist / 1000).toFixed(2) + ' km';
+
+      // 4. Accumulate Rover Trajectory Distance
       if (lastPosition) {
-        const dist = calculateDistance(lastPosition[0], lastPosition[1], lat, lon);
-        if (dist > 0.05) { // Filter micro noise
-          totalDistanceMeters += dist;
-        }
+        const dist = calculateDistance(lastPosition[0], lastPosition[1], roverPos[0], roverPos[1]);
+        if (dist > 0.05) { totalDistanceMeters += dist; }
       }
-      lastPosition = newPos;
+      lastPosition = roverPos;
 
-      // Update UI Text
-      document.getElementById('txtLat').innerText = lat.toFixed(7);
-      document.getElementById('txtLon').innerText = lon.toFixed(7);
-      document.getElementById('txtAlt').innerText = (data.alt || 0) + ' m';
-      document.getElementById('txtAcc').innerText = (data.hAcc_cm || 0) + ' cm';
-      document.getElementById('txtSpeed').innerText = (data.speed_kmh || 0) + ' km/h';
-      document.getElementById('txtHeading').innerText = (data.heading || 0) + '°';
-      document.getElementById('txtPitch').innerText = (data.pitch || 0) + '°';
-      document.getElementById('txtRoll').innerText = (data.roll || 0) + '°';
+      // Update Info Panel
+      document.getElementById('txtLat').innerText = roverData.lat.toFixed(7);
+      document.getElementById('txtLon').innerText = roverData.lon.toFixed(7);
+      document.getElementById('txtAlt').innerText = (roverData.alt || 0) + ' m';
+      document.getElementById('txtAcc').innerText = (roverData.hAcc_cm || 0) + ' cm';
+      document.getElementById('txtSpeed').innerText = (roverData.speed_kmh || 0) + ' km/h';
+      document.getElementById('txtHeading').innerText = (roverData.heading || 0) + '°';
+      document.getElementById('txtPitch').innerText = (roverData.pitch || 0) + '°';
+      document.getElementById('txtRoll').innerText = (roverData.roll || 0) + '°';
       document.getElementById('txtDistance').innerText = totalDistanceMeters < 1000 ? 
         totalDistanceMeters.toFixed(2) + ' m' : (totalDistanceMeters / 1000).toFixed(2) + ' km';
 
       const fixElem = document.getElementById('txtFix');
-      if (data.fix === 4) {
+      if (roverData.fix === 4) {
         fixElem.innerText = 'RTK FIX (1-2 cm)';
         fixElem.className = 'badge rtk-fix';
-      } else if (data.fix === 5) {
+      } else if (roverData.fix === 5) {
         fixElem.innerText = 'RTK FLOAT (20 cm)';
         fixElem.className = 'badge rtk-float';
       } else {
@@ -224,15 +244,18 @@
       if (isRecording) {
         recordedLogs.push({
           timestamp: new Date().toISOString(),
-          lat: lat,
-          lon: lon,
-          alt: data.alt || 0,
-          fix: data.fix || 0,
-          hAcc_cm: data.hAcc_cm || 0,
-          speed_kmh: data.speed_kmh || 0,
-          heading: data.heading || 0,
-          pitch: data.pitch || 0,
-          roll: data.roll || 0
+          baseLat: baseData.lat,
+          baseLon: baseData.lon,
+          roverLat: roverData.lat,
+          roverLon: roverData.lon,
+          alt: roverData.alt || 0,
+          fix: roverData.fix || 0,
+          hAcc_cm: roverData.hAcc_cm || 0,
+          speed_kmh: roverData.speed_kmh || 0,
+          heading: roverData.heading || 0,
+          pitch: roverData.pitch || 0,
+          roll: roverData.roll || 0,
+          baselineDist_m: baselineDist.toFixed(2)
         });
         document.getElementById('txtPointCount').innerText = recordedLogs.length + ' pts';
       }
@@ -276,11 +299,11 @@
     // CSV Exporter
     document.getElementById('btnExportCSV').addEventListener('click', () => {
       if (recordedLogs.length === 0) return alert('Belum ada data log terrekam!');
-      let csv = 'Timestamp,Latitude,Longitude,Altitude_m,Fix_Status,hAcc_cm,Speed_kmh,Heading_deg,Pitch_deg,Roll_deg\n';
+      let csv = 'Timestamp,Base_Lat,Base_Lon,Rover_Lat,Rover_Lon,Altitude_m,Fix_Status,hAcc_cm,Speed_kmh,Heading_deg,Pitch_deg,Roll_deg,Baseline_Dist_m\n';
       recordedLogs.forEach(r => {
-        csv += `${r.timestamp},${r.lat},${r.lon},${r.alt},${r.fix},${r.hAcc_cm},${r.speed_kmh},${r.heading},${r.pitch},${r.roll}\n`;
+        csv += `${r.timestamp},${r.baseLat},${r.baseLon},${r.roverLat},${r.roverLon},${r.alt},${r.fix},${r.hAcc_cm},${r.speed_kmh},${r.heading},${r.pitch},${r.roll},${r.baselineDist_m}\n`;
       });
-      downloadFile(csv, `Coastal_Driffter_Log_${Date.now()}.csv`, 'text/csv');
+      downloadFile(csv, `Coastal_Driffter_DualGNSS_Log_${Date.now()}.csv`, 'text/csv');
     });
 
     // GPX Exporter
@@ -292,7 +315,7 @@
     <name>Coastal Driffter Track</name>
     <trkseg>\n`;
       recordedLogs.forEach(r => {
-        gpx += `      <trkpt lat="${r.lat}" lon="${r.lon}">
+        gpx += `      <trkpt lat="${r.roverLat}" lon="${r.roverLon}">
         <ele>${r.alt}</ele>
         <time>${r.timestamp}</time>
       </trkpt>\n`;
@@ -306,7 +329,7 @@
     // KML Exporter
     document.getElementById('btnExportKML').addEventListener('click', () => {
       if (recordedLogs.length === 0) return alert('Belum ada data log terrekam!');
-      let coordsStr = recordedLogs.map(r => `${r.lon},${r.lat},${r.alt}`).join(' ');
+      let coordsStr = recordedLogs.map(r => `${r.roverLon},${r.roverLat},${r.alt}`).join(' ');
       let kml = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
