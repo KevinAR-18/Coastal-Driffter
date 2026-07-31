@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>RTK Dual-Arduino Real-Time Rover Tracker</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body { margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121212; color: #fff; }
+    #map { height: 100vh; width: 100vw; }
+    #panel {
+      position: absolute; top: 20px; right: 20px; z-index: 1000;
+      background: rgba(20, 20, 25, 0.92); backdrop-filter: blur(10px);
+      padding: 24px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.1);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5); width: 320px;
+    }
+    h3 { margin-top: 0; color: #4facfe; font-size: 18px; text-transform: uppercase; letter-spacing: 1px; }
+    .badge { padding: 6px 12px; border-radius: 20px; font-weight: 700; color: white; display: inline-block; font-size: 12px; letter-spacing: 0.5px; }
+    .rtk-fix { background: linear-gradient(135deg, #11998e, #38ef7d); box-shadow: 0 0 10px rgba(56,239,125,0.4); }
+    .rtk-float { background: linear-gradient(135deg, #FFB75E, #ED8F03); }
+    .rtk-single { background: linear-gradient(135deg, #CB2D3E, #EF473A); }
+    button {
+      width: 100%; padding: 12px; background: linear-gradient(135deg, #00c6ff, #0072ff);
+      color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: bold;
+      cursor: pointer; margin-bottom: 16px; transition: all 0.3s ease;
+      box-shadow: 0 4px 15px rgba(0,114,255,0.3);
+    }
+    button:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,114,255,0.5); }
+    .stat-row { display: flex; justify-content: space-between; align-items: center; margin: 10px 0; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 6px; }
+    .stat-row span { color: #a0a0a0; }
+    .stat-row b { color: #ffffff; }
+  </style>
+</head>
+<body>
+
+  <div id="panel">
+    <h3>📡 RTK Rover Telemetry</h3>
+    <button id="btnConnect">🔌 Hubungkan ke Arduino Base (USB Serial)</button>
+    
+    <div class="stat-row">
+      <span>Status RTK:</span>
+      <span id="txtFix" class="badge rtk-single">DISCONNECTED</span>
+    </div>
+    <div class="stat-row"><span>Latitude:</span><b id="txtLat">-</b></div>
+    <div class="stat-row"><span>Longitude:</span><b id="txtLon">-</b></div>
+    <div class="stat-row"><span>Altitude:</span><b id="txtAlt">-</b></div>
+    <div class="stat-row"><span>Akurasi (hAcc):</span><b id="txtAcc">-</b></div>
+    <div class="stat-row"><span>Kecepatan:</span><b id="txtSpeed">-</b></div>
+    <div class="stat-row"><span>Heading:</span><b id="txtHeading">-</b></div>
+  </div>
+
+  <div id="map"></div>
+
+  <script>
+    // Posisi awal peta (Default Monas / Jakarta)
+    const basePos = [-6.17539, 106.82715];
+    const map = L.map('map').setView(basePos, 18);
+
+    // Tile Layer Dark Mode / Satelit
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 21,
+      attribution: '© OpenStreetMap contributors | SimpleRTK2B Dual-Arduino'
+    }).addTo(map);
+
+    // Marker Base Station (Fixed)
+    const baseMarker = L.marker(basePos).addTo(map).bindPopup('<b>📌 Base Station (Fixed Point)</b>').openPopup();
+
+    // Marker Rover (Moving) & Path Polyline
+    let roverMarker = L.marker(basePos).addTo(map).bindPopup('<b>🚗 Rover Moving Unit</b>');
+    let pathPolyline = L.polyline([], { color: '#00c6ff', weight: 4, opacity: 0.8 }).addTo(map);
+
+    // Handler Serial Port Browser (Web Serial API)
+    document.getElementById('btnConnect').addEventListener('click', async () => {
+      try {
+        const port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+
+        const decoder = new TextDecoderStream();
+        port.readable.pipeTo(decoder.writable);
+        const reader = decoder.readable.getReader();
+
+        let buffer = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += value;
+          let lines = buffer.split('\n');
+          buffer = lines.pop();
+
+          for (let line of lines) {
+            line = line.trim();
+            if (line.startsWith('{') && line.endsWith('}')) {
+              try {
+                const data = JSON.parse(line);
+                updateDashboard(data);
+              } catch (e) {}
+            }
+          }
+        }
+      } catch (err) {
+        alert('Gagal membuka port serial: ' + err);
+      }
+    });
+
+    function updateDashboard(data) {
+      const lat = data.lat;
+      const lon = data.lon;
+      const newPos = [lat, lon];
+
+      roverMarker.setLatLng(newPos);
+      pathPolyline.addLatLng(newPos);
+      map.panTo(newPos);
+
+      document.getElementById('txtLat').innerText = lat.toFixed(7);
+      document.getElementById('txtLon').innerText = lon.toFixed(7);
+      document.getElementById('txtAlt').innerText = data.alt + ' m';
+      document.getElementById('txtAcc').innerText = data.hAcc_cm + ' cm';
+      document.getElementById('txtSpeed').innerText = data.speed_kmh + ' km/h';
+      document.getElementById('txtHeading').innerText = data.heading + '°';
+
+      const fixElem = document.getElementById('txtFix');
+      if (data.fix === 4) {
+        fixElem.innerText = 'RTK FIX (1-2 cm)';
+        fixElem.className = 'badge rtk-fix';
+      } else if (data.fix === 5) {
+        fixElem.innerText = 'RTK FLOAT (20 cm)';
+        fixElem.className = 'badge rtk-float';
+      } else {
+        fixElem.innerText = 'SINGLE (1.5 m)';
+        fixElem.className = 'badge rtk-single';
+      }
+    }
+  </script>
+</body>
+</html>
