@@ -1,188 +1,194 @@
 #include <Arduino.h>
+#include <SoftwareSerial.h>
 
 // ============================================================================
-// COASTAL DRIFFTER - BASE STATION FIRMWARE (Dual-GNSS Base & Rover Telemetry)
+// COASTAL DRIFFTER - BASE STATION FIRMWARE
+// Rover tanpa Arduino — raw UBX dari simpleRTK2B Rover via XBee
 // ============================================================================
-// Serial1: Terhubung ke simpleRTK2B Base ZED-F9P (RTCM3 Output & UBX-NAV-PVT)
-// Serial2: Terhubung ke Radio Telemetry / LoRa Transceiver (RX2=17, TX2=16)
-// Serial:  USB Serial ke Laptop / PC Dashboard (Format JSON Stream @ 115200 bps)
+// SoftwareSerial (pin 4=RX, 5=TX): Terhubung ke simpleRTK2B Base ZED-F9P
+// SoftwareSerial (pin 2=RX, 8=TX): Terhubung ke XBee Radio Telemetry
+//   - Menerima raw UBX dari Rover GNSS via XBee
+//   - Mengirim RTCM3 koreksi ke Rover via XBee
+// HW Serial (USB): ke PC Dashboard (JSON Stream @ 115200 bps)
 // ============================================================================
 
-#define RTK_BASE_SERIAL Serial1
-#define RADIO_SERIAL    Serial2
-#define PC_SERIAL       Serial
-
-#pragma pack(push, 1)
-struct TelemetryPacket {
-  uint8_t  header1;
-  uint8_t  header2;
-  uint8_t  rover_id;
-  int32_t  lat;
-  int32_t  lon;
-  int32_t  alt_mm;
-  uint8_t  fix_status;
-  uint16_t h_acc_mm;
-  uint16_t speed_01kmh;
-  uint16_t heading_01deg;
-  int16_t  pitch_01deg;
-  int16_t  roll_01deg;
-  int16_t  rel_N_cm;
-  int16_t  rel_E_cm;
-  uint8_t  checksum;
-};
-#pragma pack(pop)
-
-TelemetryPacket inPacket;
-uint8_t rxBuffer[sizeof(TelemetryPacket)];
-size_t rxIndex = 0;
-
-// Data Koordinat Live Base Station (Default Monas / Static Base)
-int32_t base_lat = -61753924;   // -6.1753924 deg
-int32_t base_lon = 1068271532;  // 106.8271532 deg
-int32_t base_alt_mm = 15420;    // 15.420 m
+SoftwareSerial gnssSerial(4, 5);
+SoftwareSerial radioSerial(2, 8);
+#define PC_SERIAL Serial
 
 // ----------------------------------------------------------------------------
-// UBX-NAV-PVT PARSER UNTUK BASE STATION ZED-F9P
+// GNSS DATA
+// ----------------------------------------------------------------------------
+struct GnssData {
+  int32_t  lat, lon, alt_mm;
+  uint8_t  fix;
+  uint16_t hAcc_mm;
+  int32_t  gSpeed_mms, headMot_1e5;
+  int32_t  relN_cm, relE_cm;
+};
+
+GnssData base  = { -61753924, 1068271532, 15420, 0, 0, 0, 0, 0, 0 };
+GnssData rover = { 0 };
+
+unsigned long lastJsonTime = 0;
+
+// ----------------------------------------------------------------------------
+// UBX STATE MACHINE
 // ----------------------------------------------------------------------------
 enum UbxState {
   UBX_WAIT_SYNC1, UBX_WAIT_SYNC2, UBX_WAIT_CLASS, UBX_WAIT_ID,
   UBX_WAIT_LEN1, UBX_WAIT_LEN2, UBX_PAYLOAD, UBX_WAIT_CKA, UBX_WAIT_CKB
 };
 
-UbxState baseUbxState = UBX_WAIT_SYNC1;
-uint8_t baseUbxClass = 0, baseUbxId = 0;
-uint16_t baseUbxLen = 0, baseUbxIndex = 0;
-uint8_t baseUbxBuf[128];
-uint8_t baseCkA = 0, baseCkB = 0;
+struct UbxParser {
+  UbxState state;
+  uint8_t  uClass, uId;
+  uint16_t len, index;
+  uint8_t  buf[128];
+  uint8_t  ckA, ckB;
+};
+
+UbxParser baseParser  = { UBX_WAIT_SYNC1 };
+UbxParser roverParser = { UBX_WAIT_SYNC1 };
 
 int32_t parseLong(uint8_t *b) {
   return (int32_t)((uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24));
 }
 
-void parseBaseUbxPayload(uint8_t uClass, uint8_t uId, uint8_t *payload, uint16_t len) {
-  // UBX-NAV-PVT (Class 0x01, ID 0x07)
-  if (uClass == 0x01 && uId == 0x07 && len >= 92) {
-    base_lon = parseLong(&payload[24]);    // Deg * 1e7
-    base_lat = parseLong(&payload[28]);    // Deg * 1e7
-    base_alt_mm = parseLong(&payload[36]); // mm MSL
-  }
-}
-
-void processBaseByteUBX(uint8_t c) {
-  switch (baseUbxState) {
+bool processUbxByte(UbxParser &px, uint8_t c, uint8_t &outClass, uint8_t &outId) {
+  switch (px.state) {
     case UBX_WAIT_SYNC1:
-      if (c == 0xB5) baseUbxState = UBX_WAIT_SYNC2;
+      if (c == 0xB5) px.state = UBX_WAIT_SYNC2;
       break;
     case UBX_WAIT_SYNC2:
-      if (c == 0x62) baseUbxState = UBX_WAIT_CLASS;
-      else baseUbxState = UBX_WAIT_SYNC1;
+      px.state = (c == 0x62) ? UBX_WAIT_CLASS : UBX_WAIT_SYNC1;
       break;
     case UBX_WAIT_CLASS:
-      baseUbxClass = c; baseCkA = c; baseCkB = c;
-      baseUbxState = UBX_WAIT_ID;
+      px.uClass = c; px.ckA = c; px.ckB = c; px.state = UBX_WAIT_ID;
       break;
     case UBX_WAIT_ID:
-      baseUbxId = c; baseCkA += c; baseCkB += baseCkA;
-      baseUbxState = UBX_WAIT_LEN1;
+      px.uId = c; px.ckA += c; px.ckB += px.ckA; px.state = UBX_WAIT_LEN1;
       break;
     case UBX_WAIT_LEN1:
-      baseUbxLen = c; baseCkA += c; baseCkB += baseCkA;
-      baseUbxState = UBX_WAIT_LEN2;
+      px.len = c; px.ckA += c; px.ckB += px.ckA; px.state = UBX_WAIT_LEN2;
       break;
     case UBX_WAIT_LEN2:
-      baseUbxLen |= ((uint16_t)c << 8); baseCkA += c; baseCkB += baseCkA;
-      baseUbxIndex = 0;
-      if (baseUbxLen > sizeof(baseUbxBuf)) baseUbxState = UBX_WAIT_SYNC1;
-      else if (baseUbxLen == 0) baseUbxState = UBX_WAIT_CKA;
-      else baseUbxState = UBX_PAYLOAD;
+      px.len |= ((uint16_t)c << 8); px.ckA += c; px.ckB += px.ckA; px.index = 0;
+      if (px.len > sizeof(px.buf)) px.state = UBX_WAIT_SYNC1;
+      else if (px.len == 0)        px.state = UBX_WAIT_CKA;
+      else                         px.state = UBX_PAYLOAD;
       break;
     case UBX_PAYLOAD:
-      baseUbxBuf[baseUbxIndex++] = c; baseCkA += c; baseCkB += baseCkA;
-      if (baseUbxIndex >= baseUbxLen) baseUbxState = UBX_WAIT_CKA;
+      px.buf[px.index++] = c; px.ckA += c; px.ckB += px.ckA;
+      if (px.index >= px.len) px.state = UBX_WAIT_CKA;
       break;
     case UBX_WAIT_CKA:
-      if (c == baseCkA) baseUbxState = UBX_WAIT_CKB;
-      else baseUbxState = UBX_WAIT_SYNC1;
+      px.state = (c == px.ckA) ? UBX_WAIT_CKB : UBX_WAIT_SYNC1;
       break;
     case UBX_WAIT_CKB:
-      if (c == baseCkB) parseBaseUbxPayload(baseUbxClass, baseUbxId, baseUbxBuf, baseUbxLen);
-      baseUbxState = UBX_WAIT_SYNC1;
+      px.state = UBX_WAIT_SYNC1;
+      if (c == px.ckB) {
+        outClass = px.uClass;
+        outId    = px.uId;
+        return true;
+      }
       break;
   }
+  return false;
 }
 
-uint8_t calculateChecksum(uint8_t *data, size_t len) {
-  uint8_t crc = 0;
-  for (size_t i = 0; i < len; i++) crc ^= data[i];
-  return crc;
+void parseNavPvt(UbxParser &px, GnssData &d) {
+  uint8_t *p  = px.buf;
+  uint8_t  ft = p[20];
+  uint8_t  cs = (p[21] >> 6) & 0x03;
+
+  if (cs == 2)      d.fix = 4;
+  else if (cs == 1) d.fix = 5;
+  else if (ft == 3) d.fix = 1;
+  else              d.fix = 0;
+
+  d.lon         = parseLong(&p[24]);
+  d.lat         = parseLong(&p[28]);
+  d.alt_mm      = parseLong(&p[36]);
+  d.hAcc_mm     = (uint16_t)((uint32_t)((uint32_t)p[40] | ((uint32_t)p[41] << 8)) & 0xFFFF);
+  d.gSpeed_mms  = parseLong(&p[60]);
+  d.headMot_1e5 = parseLong(&p[64]);
 }
 
-void processRoverPacket(const TelemetryPacket& pkt) {
-  // Format JSON Stream ganda (base + rover) ke Laptop Web Dashboard
+void parseRelposned(UbxParser &px, GnssData &d) {
+  d.relN_cm = parseLong(&px.buf[8]);
+  d.relE_cm = parseLong(&px.buf[12]);
+}
+
+// ----------------------------------------------------------------------------
+// JSON STREAM
+// ----------------------------------------------------------------------------
+void sendJson() {
   PC_SERIAL.print(F("{\"base\":{\"lat\":"));
-  PC_SERIAL.print(base_lat / 1e7, 7);
+  PC_SERIAL.print(base.lat / 1e7, 7);
   PC_SERIAL.print(F(",\"lon\":"));
-  PC_SERIAL.print(base_lon / 1e7, 7);
+  PC_SERIAL.print(base.lon / 1e7, 7);
   PC_SERIAL.print(F(",\"alt\":"));
-  PC_SERIAL.print(base_alt_mm / 1000.0, 3);
-  PC_SERIAL.print(F("},\"rover\":{\"id\":"));
-  PC_SERIAL.print(pkt.rover_id);
-  PC_SERIAL.print(F(",\"lat\":"));
-  PC_SERIAL.print(pkt.lat / 1e7, 7);
+  PC_SERIAL.print(base.alt_mm / 1000.0, 3);
+
+  PC_SERIAL.print(F("},\"rover\":{\"id\":1,\"lat\":"));
+  PC_SERIAL.print(rover.lat / 1e7, 7);
   PC_SERIAL.print(F(",\"lon\":"));
-  PC_SERIAL.print(pkt.lon / 1e7, 7);
+  PC_SERIAL.print(rover.lon / 1e7, 7);
   PC_SERIAL.print(F(",\"alt\":"));
-  PC_SERIAL.print(pkt.alt_mm / 1000.0, 3);
+  PC_SERIAL.print(rover.alt_mm / 1000.0, 3);
   PC_SERIAL.print(F(",\"fix\":"));
-  PC_SERIAL.print(pkt.fix_status);
+  PC_SERIAL.print(rover.fix);
   PC_SERIAL.print(F(",\"hAcc_cm\":"));
-  PC_SERIAL.print(pkt.h_acc_mm / 10.0, 1);
+  PC_SERIAL.print(rover.hAcc_mm / 10.0, 1);
   PC_SERIAL.print(F(",\"speed_kmh\":"));
-  PC_SERIAL.print(pkt.speed_01kmh / 10.0, 1);
+  PC_SERIAL.print((rover.gSpeed_mms * 36) / 100000.0, 1);
   PC_SERIAL.print(F(",\"heading\":"));
-  PC_SERIAL.print(pkt.heading_01deg / 10.0, 1);
-  PC_SERIAL.print(F(",\"pitch\":"));
-  PC_SERIAL.print(pkt.pitch_01deg / 10.0, 1);
-  PC_SERIAL.print(F(",\"roll\":"));
-  PC_SERIAL.print(pkt.roll_01deg / 10.0, 1);
+  int32_t h = rover.headMot_1e5 / 100000;
+  if (h < 0) h += 360;
+  PC_SERIAL.print(h);
+  PC_SERIAL.print(F(",\"pitch\":0.0,\"roll\":0.0"));
   PC_SERIAL.print(F(",\"relN_m\":"));
-  PC_SERIAL.print(pkt.rel_N_cm / 100.0, 2);
+  PC_SERIAL.print(rover.relN_cm / 100.0, 2);
   PC_SERIAL.print(F(",\"relE_m\":"));
-  PC_SERIAL.print(pkt.rel_E_cm / 100.0, 2);
+  PC_SERIAL.print(rover.relE_cm / 100.0, 2);
   PC_SERIAL.println(F("}}"));
 }
 
+// ----------------------------------------------------------------------------
 void setup() {
-  PC_SERIAL.begin(115200);       // USB Serial ke Laptop Web Dashboard
-  RTK_BASE_SERIAL.begin(38400);  // Baudrate ZED-F9P Base
-  RADIO_SERIAL.begin(57600);    // Baudrate Radio Telemetry
+  PC_SERIAL.begin(115200);
+  gnssSerial.begin(38400);
+  radioSerial.begin(9600);
 }
 
 void loop() {
-  // 1. Downlink: Forward data koreksi RTCM3 & Parse UBX Base dari ZED-F9P Base ke Radio
-  while (RTK_BASE_SERIAL.available()) {
-    uint8_t b = RTK_BASE_SERIAL.read();
-    RADIO_SERIAL.write(b);   // Downlink RTCM3 ke Rover
-    processBaseByteUBX(b);  // Parse Base Live GNSS Location
+  // 1. Base GNSS — parse + relay RTCM3 ke Rover
+  gnssSerial.listen();
+  while (gnssSerial.available()) {
+    uint8_t b = gnssSerial.read();
+    radioSerial.write(b); // forward RTCM3
+    uint8_t cls = 0, id = 0;
+    if (processUbxByte(baseParser, b, cls, id)) {
+      if (cls == 0x01 && id == 0x07)       parseNavPvt(baseParser, base);
+      else if (cls == 0x01 && id == 0x3C)  parseRelposned(baseParser, base);
+    }
   }
 
-  // 2. Uplink: Terima paket telemetri dari Coastal Drifter via Radio Telemetry
-  while (RADIO_SERIAL.available()) {
-    uint8_t b = RADIO_SERIAL.read();
-
-    if (rxIndex == 0 && b != 0xAA) continue;
-    if (rxIndex == 1 && b != 0xBB) { rxIndex = 0; continue; }
-
-    rxBuffer[rxIndex++] = b;
-
-    if (rxIndex >= sizeof(TelemetryPacket)) {
-      memcpy(&inPacket, rxBuffer, sizeof(TelemetryPacket));
-      uint8_t calcCrc = calculateChecksum(rxBuffer, sizeof(TelemetryPacket) - 1);
-
-      if (calcCrc == inPacket.checksum) {
-        processRoverPacket(inPacket); // Packet Valid! Stream Dual-GNSS JSON ke PC
-      }
-      rxIndex = 0;
+  // 2. Rover UBX via XBee
+  radioSerial.listen();
+  while (radioSerial.available()) {
+    uint8_t b = radioSerial.read();
+    uint8_t cls = 0, id = 0;
+    if (processUbxByte(roverParser, b, cls, id)) {
+      if (cls == 0x01 && id == 0x07)       parseNavPvt(roverParser, rover);
+      else if (cls == 0x01 && id == 0x3C)  parseRelposned(roverParser, rover);
     }
+  }
+
+  // 3. JSON 5 Hz
+  if (millis() - lastJsonTime >= 200) {
+    lastJsonTime = millis();
+    sendJson();
   }
 }

@@ -1,14 +1,15 @@
 #include <Arduino.h>
+#include <SoftwareSerial.h>
 
 // ============================================================================
 // COASTAL DRIFFTER - ROVER FIRMWARE (ZED-F9P Native UBX Parser + IMU Telemetry)
 // ============================================================================
-// Serial1: Terhubung ke simpleRTK2B Rover ZED-F9P (RX1=19, TX1=18 / GPIO 16, 17)
-// Serial2: Terhubung ke Modul Radio Telemetry / LoRa (RX2=17, TX2=16 / GPIO 4, 2)
+// HW Serial (pin 0=RX, 1=TX): Terhubung ke simpleRTK2B Rover ZED-F9P
+// SoftwareSerial (pin 2=RX, 8=TX): Terhubung ke XBee Radio Telemetry
 // ============================================================================
 
-#define RTK_SERIAL   Serial1
-#define RADIO_SERIAL Serial2
+#define RTK_SERIAL Serial
+SoftwareSerial radioSerial(2, 8);
 
 // Set 1 untuk mengaktifkan data simulasi jika hardware ZED-F9P belum terhubung
 #define ENABLE_UBX_SIMULATION 0
@@ -186,17 +187,14 @@ void readImuSensors() {
 }
 
 void setup() {
-  Serial.begin(115200);      // Debug Serial USB PC
   RTK_SERIAL.begin(38400);   // Baudrate ZED-F9P Rover
-  RADIO_SERIAL.begin(57600); // Baudrate Radio Telemetry
-
-  Serial.println(F("[COASTAL DRIFFTER] Rover Initialized. UBX & IMU Engine Ready."));
+  radioSerial.begin(9600);   // Baudrate XBee Radio Telemetry
 }
 
 void loop() {
   // 1. Downlink: Forward data koreksi RTCM3 dari Radio Telemetry ke simpleRTK2B Rover
-  while (RADIO_SERIAL.available()) {
-    uint8_t b = RADIO_SERIAL.read();
+  while (radioSerial.available()) {
+    uint8_t b = radioSerial.read();
     RTK_SERIAL.write(b); // Feed RTCM3 correction into ZED-F9P
   }
 
@@ -229,6 +227,6 @@ void loop() {
     telePacket.checksum = calculateChecksum((uint8_t*)&telePacket, sizeof(TelemetryPacket) - 1);
 
     // Kirim paket telemetri nirkabel ke Base Station
-    RADIO_SERIAL.write((uint8_t*)&telePacket, sizeof(TelemetryPacket));
+    radioSerial.write((uint8_t*)&telePacket, sizeof(TelemetryPacket));
   }
 }
