@@ -20,7 +20,6 @@
     * { box-sizing: border-box; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
     body { margin: 0; padding: 0; background-color: var(--bg-dark); color: var(--text-main); overflow: hidden; }
     #map { height: 100vh; width: 100vw; z-index: 1; }
-
     #panel {
       position: absolute; top: 20px; right: 20px; z-index: 1000;
       background: var(--card-bg); backdrop-filter: blur(12px);
@@ -28,10 +27,8 @@
       box-shadow: 0 10px 30px rgba(0,0,0,0.5); width: 360px;
       max-height: calc(100vh - 40px); overflow-y: auto;
     }
-
     h2 { margin: 0 0 4px 0; color: var(--accent-blue); font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
     .subtitle { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.5px; }
-
     .btn {
       width: 100%; padding: 12px; border: none; border-radius: 8px;
       font-size: 14px; font-weight: 600; cursor: pointer;
@@ -40,67 +37,66 @@
     }
     .btn-primary { background: linear-gradient(135deg, #0284c7, #2563eb); color: white; box-shadow: 0 4px 12px rgba(37,99,235,0.3); }
     .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(37,99,235,0.5); }
-    
     .btn-record { background: linear-gradient(135deg, #dc2626, #b91c1c); color: white; }
     .btn-record.recording { animation: pulse 1.5s infinite; background: linear-gradient(135deg, #16a34a, #15803d); }
-
     .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
     .btn-secondary { background: rgba(255,255,255,0.08); color: var(--text-main); border: 1px solid rgba(255,255,255,0.1); padding: 8px 12px; font-size: 12px; }
     .btn-secondary:hover { background: rgba(255,255,255,0.15); }
-
     @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
-
     .badge { padding: 4px 10px; border-radius: 20px; font-weight: 700; color: white; font-size: 11px; letter-spacing: 0.5px; display: inline-block; }
     .rtk-fix { background: var(--accent-green); box-shadow: 0 0 10px rgba(34,197,94,0.4); }
     .rtk-float { background: var(--accent-yellow); color: #000; }
     .rtk-single { background: var(--accent-red); }
-
     .stat-section { margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 12px; }
     .section-title { font-size: 12px; font-weight: 700; color: var(--accent-blue); text-transform: uppercase; margin-bottom: 8px; }
-
     .stat-row { display: flex; justify-content: space-between; align-items: center; margin: 8px 0; font-size: 13px; }
     .stat-row span { color: var(--text-muted); }
     .stat-row b { color: var(--text-main); font-family: monospace; font-size: 14px; }
+    .baud-select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.06); color: var(--text-main); font-size: 13px; margin-bottom: 10px; }
+    .baud-select:focus { outline: none; border-color: var(--accent-blue); }
   </style>
 </head>
 <body>
 
   <div id="panel">
     <h2>🚤 Coastal Driffter</h2>
-    <div class="subtitle">Dual-GNSS (Base & Rover Tracker)</div>
+    <div class="subtitle" id="subtitle">Dual-GNSS (Base & Rover Tracker)</div>
 
-    <button id="btnConnect" class="btn btn-primary">🔌 Hubungkan ke Base (USB Serial)</button>
+    <select id="selBaud" class="baud-select">
+      <option value="38400" selected>Baud 38400 (NMEA Rover)</option>
+      <option value="38400">Baud 115200 (JSON Base)</option>
+    </select>
+    <button id="btnConnect" class="btn btn-primary">🔌 Hubungkan ke Serial</button>
 
-    <div class="btn-group">
+    <div id="sectionRecord" class="btn-group">
       <button id="btnRecord" class="btn btn-record">🔴 Mulai Record</button>
       <button id="btnClear" class="btn btn-secondary">🗑️ Clear Track</button>
     </div>
-
-    <div class="btn-group">
+    <div id="sectionExport" class="btn-group">
       <button id="btnExportCSV" class="btn btn-secondary">📥 Export CSV</button>
       <button id="btnExportGPX" class="btn btn-secondary">🗺️ Export GPX</button>
     </div>
     <button id="btnExportKML" class="btn btn-secondary" style="width: 100%; margin-bottom: 16px;">📍 Export KML (Google Earth)</button>
 
     <div class="stat-section">
-      <div class="section-title">Status Telemetri & RTK</div>
+      <div class="section-title">Status Tracking</div>
       <div class="stat-row">
-        <span>Fix Status:</span>
+        <span>Mode:</span>
         <span id="txtFix" class="badge rtk-single">DISCONNECTED</span>
       </div>
       <div class="stat-row"><span>Log Points:</span><b id="txtPointCount">0 pts</b></div>
-      <div class="stat-row"><span>Jarak Baseline Base-Rover:</span><b id="txtBaselineDist">0.00 m</b></div>
+      <div class="stat-row" id="rowBaseline"><span>Jarak Baseline Base-Rover:</span><b id="txtBaselineDist">0.00 m</b></div>
       <div class="stat-row"><span>Total Jarak Rover:</span><b id="txtDistance">0.00 m</b></div>
     </div>
 
-    <div class="stat-section">
-      <div class="section-title">📌 Posisi Live Base Station</div>
+    <div class="stat-section" id="sectionBase">
+      <div class="section-title">📌 Posisi Base Station</div>
       <div class="stat-row"><span>Base Lat:</span><b id="txtBaseLat">-6.1753924</b></div>
       <div class="stat-row"><span>Base Lon:</span><b id="txtBaseLon">106.8271532</b></div>
     </div>
 
     <div class="stat-section">
-      <div class="section-title">🚤 Posisi Moving Rover</div>
+      <div class="section-title">🚤 Posisi Rover</div>
       <div class="stat-row"><span>Rover Lat:</span><b id="txtLat">-</b></div>
       <div class="stat-row"><span>Rover Lon:</span><b id="txtLon">-</b></div>
       <div class="stat-row"><span>Altitude:</span><b id="txtAlt">-</b></div>
@@ -108,9 +104,9 @@
     </div>
 
     <div class="stat-section">
-      <div class="section-title">Dinamika Pergerakan & IMU</div>
+      <div class="section-title">Dinamika Pergerakan</div>
       <div class="stat-row"><span>Kecepatan:</span><b id="txtSpeed">-</b></div>
-      <div class="stat-row"><span>Heading (Yaw):</span><b id="txtHeading">-</b></div>
+      <div class="stat-row"><span>Heading:</span><b id="txtHeading">-</b></div>
       <div class="stat-row"><span>IMU Pitch:</span><b id="txtPitch">-</b></div>
       <div class="stat-row"><span>IMU Roll:</span><b id="txtRoll">-</b></div>
     </div>
@@ -119,33 +115,218 @@
   <div id="map"></div>
 
   <script>
-    // Posisi Awal Default
-    let basePos = [-6.1753924, 106.8271532];
-    const map = L.map('map').setView(basePos, 18);
-
-    // Leaflet Tile Layer (Dark Map)
+    let initialView = [-6.2, 106.8];
+    const map = L.map('map').setView(initialView, 13);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 21,
-      attribution: '© OpenStreetMap contributors | Coastal Driffter Dual-GNSS System'
+      attribution: '© OpenStreetMap contributors | Coastal Driffter'
     }).addTo(map);
 
-    // Markers & Lines
-    const baseMarker = L.marker(basePos).addTo(map).bindPopup('<b>📌 Base Station (Live Fixed GNSS)</b>').openPopup();
-    let roverMarker = L.marker(basePos).addTo(map).bindPopup('<b>🚤 Coastal Drifter Moving Unit</b>');
-    let pathPolyline = L.polyline([], { color: '#38bdf8', weight: 4, opacity: 0.85 }).addTo(map);
-    let baselineLine = L.polyline([basePos, basePos], { color: '#eab308', weight: 2, dashArray: '6, 6' }).addTo(map);
-
-    // Recording State Data
+    let baseMarker, roverMarker, pathPolyline, baselineLine;
     let recordedLogs = [];
     let isRecording = false;
     let totalDistanceMeters = 0;
     let lastPosition = null;
+    let useNmeaMode = false;
+    let firstFix = false;
 
-    // Web Serial Handler
+    // Store latest NMEA state (RMC gives pos/speed/heading, GGA gives fix/alt/hAcc)
+    let nmeaState = { lat: 0, lon: 0, alt: 0, fix: 0, hAcc_m: 0, speed_kmh: 0, heading: 0 };
+    let nmeaLastUpdate = 0;
+
+    // -------------------------------------------------------------------------
+    // NMEA PARSERS
+    // -------------------------------------------------------------------------
+    function parseNmeaDeg(coord, dir) {
+      if (!coord) return NaN;
+      const val = parseFloat(coord);
+      if (isNaN(val)) return NaN;
+      const deg = Math.floor(val / 100);
+      const min = val - deg * 100;
+      let dec = deg + min / 60;
+      if (dir === 'S' || dir === 'W') dec = -dec;
+      return dec;
+    }
+
+    function parseNmeaGga(line) {
+      const parts = line.split(',');
+      if (parts[0] !== '$GNGGA' && parts[0] !== '$GPGGA' && parts[0] !== '$GLGGA') return;
+      if (parts.length < 10) return;
+
+      const lat = parseNmeaDeg(parts[2], parts[3]);
+      const lon = parseNmeaDeg(parts[4], parts[5]);
+      if (isNaN(lat) || isNaN(lon)) return;
+
+      const fixQuality = parseInt(parts[6]) || 0;
+      const alt = parseFloat(parts[9]) || 0;
+      const hdop = parseFloat(parts[8]) || 0;
+
+      nmeaState.lat = lat;
+      nmeaState.lon = lon;
+      nmeaState.alt = alt;
+      nmeaState.fix = fixQuality;
+      nmeaState.hAcc_m = hdop;  // HDOP ~ horizontal accuracy estimate
+      nmeaState.lastUpdate = Date.now();
+    }
+
+    function parseNmeaRmc(line) {
+      const parts = line.split(',');
+      if (parts[0] !== '$GNRMC' && parts[0] !== '$GPRMC' && parts[0] !== '$GLRMC') return null;
+      if (parts.length < 10) return null;
+      if (parts[2] !== 'A') return null;
+
+      const lat = parseNmeaDeg(parts[3], parts[4]);
+      const lon = parseNmeaDeg(parts[5], parts[6]);
+      if (isNaN(lat) || isNaN(lon)) return null;
+
+      const speedKnots = parseFloat(parts[7]) || 0;
+      const heading = parseFloat(parts[8]) || 0;
+
+      nmeaState.lat = lat;
+      nmeaState.lon = lon;
+      nmeaState.speed_kmh = speedKnots * 1.852;
+      nmeaState.heading = heading;
+      nmeaState.lastUpdate = Date.now();
+    }
+
+    function buildNmeaData() {
+      return {
+        lat: nmeaState.lat,
+        lon: nmeaState.lon,
+        alt: nmeaState.alt,
+        fix: nmeaState.fix,
+        hAcc_cm: (nmeaState.hAcc_m * 100).toFixed(1),
+        speed_kmh: nmeaState.speed_kmh,
+        heading: nmeaState.heading,
+        pitch: 0,
+        roll: 0,
+        relN_m: 0,
+        relE_m: 0
+      };
+    }
+
+    function updateDashboard(data) {
+      const baseData = data.base || { lat: 0, lon: 0 };
+      const roverData = data.rover || data;
+      const hasBase = !!data.base;
+
+      let gBasePos = hasBase ? [baseData.lat, baseData.lon] : [0, 0];
+      const roverPos = [roverData.lat, roverData.lon];
+
+      // Init markers + map view on first valid position
+      if (!firstFix) {
+        firstFix = true;
+        totalDistanceMeters = 0;
+        lastPosition = null;
+        map.setView(roverPos, 18);
+        if (hasBase) {
+          baseMarker = L.marker(gBasePos).addTo(map).bindPopup('<b>📌 Base Station</b>');
+          document.getElementById('sectionBase').style.display = '';
+          document.getElementById('rowBaseline').style.display = '';
+          document.getElementById('subtitle').innerText = 'Dual-GNSS (Base & Rover)';
+        } else {
+          document.getElementById('sectionBase').style.display = 'none';
+          document.getElementById('rowBaseline').style.display = 'none';
+          document.getElementById('subtitle').innerText = 'Rover Tracker';
+        }
+        roverMarker = L.marker(roverPos).addTo(map).bindPopup('<b>🚤 Coastal Drifter</b>');
+        pathPolyline = L.polyline([], { color: '#38bdf8', weight: 4, opacity: 0.85 }).addTo(map);
+        baselineLine = L.polyline([], { color: '#eab308', weight: 2, dashArray: '6, 6' }).addTo(map);
+      }
+
+      // Base marker
+      if (hasBase && baseMarker) {
+        baseMarker.setLatLng(gBasePos);
+        document.getElementById('txtBaseLat').innerText = baseData.lat.toFixed(7);
+        document.getElementById('txtBaseLon').innerText = baseData.lon.toFixed(7);
+      }
+
+      // Rover marker
+      roverMarker.setLatLng(roverPos);
+      pathPolyline.addLatLng(roverPos);
+      map.panTo(roverPos);
+
+      // Baseline
+      if (hasBase) {
+        baselineLine.setLatLngs([gBasePos, roverPos]);
+        const bd = calculateDistance(gBasePos[0], gBasePos[1], roverPos[0], roverPos[1]);
+        document.getElementById('txtBaselineDist').innerText = bd < 1000 ?
+          bd.toFixed(2) + ' m' : (bd / 1000).toFixed(2) + ' km';
+      } else {
+        baselineLine.setLatLngs([]);
+      }
+
+      // Trajectory distance
+      if (lastPosition) {
+        const dist = calculateDistance(lastPosition[0], lastPosition[1], roverPos[0], roverPos[1]);
+        if (dist > 0.05) totalDistanceMeters += dist;
+      }
+      lastPosition = roverPos;
+
+      // Panel info
+      document.getElementById('txtLat').innerText = roverData.lat.toFixed(7);
+      document.getElementById('txtLon').innerText = roverData.lon.toFixed(7);
+      document.getElementById('txtAlt').innerText = (roverData.alt || 0).toFixed(2) + ' m';
+      document.getElementById('txtAcc').innerText = roverData.hAcc_cm ? (roverData.hAcc_cm + ' cm') : '-';
+      document.getElementById('txtSpeed').innerText = (roverData.speed_kmh || 0).toFixed(2) + ' km/h';
+      document.getElementById('txtHeading').innerText = (roverData.heading || 0).toFixed(1) + '°';
+      document.getElementById('txtPitch').innerText = roverData.pitch ? roverData.pitch + '°' : '-';
+      document.getElementById('txtRoll').innerText = roverData.roll ? roverData.roll + '°' : '-';
+      document.getElementById('txtDistance').innerText = totalDistanceMeters < 1000 ?
+        totalDistanceMeters.toFixed(2) + ' m' : (totalDistanceMeters / 1000).toFixed(2) + ' km';
+
+      // Fix status
+      const fixElem = document.getElementById('txtFix');
+      if (roverData.fix === 4) {
+        fixElem.innerText = 'RTK FIX (1-2 cm)';
+        fixElem.className = 'badge rtk-fix';
+      } else if (roverData.fix === 5) {
+        fixElem.innerText = 'RTK FLOAT (20 cm)';
+        fixElem.className = 'badge rtk-float';
+      } else if (roverData.fix === 2) {
+        fixElem.innerText = 'DGPS';
+        fixElem.className = 'badge rtk-float';
+      } else if (roverData.fix === 1) {
+        fixElem.innerText = useNmeaMode ? 'SINGLE' : 'SINGLE (1.5 m)';
+        fixElem.className = 'badge rtk-single';
+      } else {
+        fixElem.innerText = 'NO FIX';
+        fixElem.className = 'badge rtk-single';
+      }
+
+      // Recording
+      if (isRecording) {
+        recordedLogs.push({
+          timestamp: new Date().toISOString(),
+          baseLat: hasBase ? baseData.lat : 0,
+          baseLon: hasBase ? baseData.lon : 0,
+          roverLat: roverData.lat,
+          roverLon: roverData.lon,
+          alt: roverData.alt || 0,
+          fix: roverData.fix || 0,
+          hAcc_cm: roverData.hAcc_cm || 0,
+          speed_kmh: roverData.speed_kmh || 0,
+          heading: roverData.heading || 0,
+          pitch: roverData.pitch || 0,
+          roll: roverData.roll || 0,
+          baselineDist_m: hasBase ? calculateDistance(gBasePos[0], gBasePos[1], roverPos[0], roverPos[1]).toFixed(2) : 0
+        });
+        document.getElementById('txtPointCount').innerText = recordedLogs.length + ' pts';
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Web Serial
+    // -------------------------------------------------------------------------
     document.getElementById('btnConnect').addEventListener('click', async () => {
       try {
+        const baud = parseInt(document.getElementById('selBaud').value);
         const port = await navigator.serial.requestPort();
-        await port.open({ baudRate: 115200 });
+        await port.open({ baudRate: baud });
+
+        useNmeaMode = (baud === 38400);
+        document.getElementById('txtFix').innerText = useNmeaMode ? 'NMEA (LISTENING)' : 'JSON (LISTENING)';
+        document.getElementById('txtFix').className = 'badge rtk-single';
 
         const decoder = new TextDecoderStream();
         port.readable.pipeTo(decoder.writable);
@@ -161,11 +342,28 @@
 
           for (let line of lines) {
             line = line.trim();
+            if (!line) continue;
+
+            // 1. Coba JSON parse
             if (line.startsWith('{') && line.endsWith('}')) {
               try {
                 const data = JSON.parse(line);
                 updateDashboard(data);
+                continue;
               } catch (e) {}
+            }
+
+            // 2. Coba NMEA parse
+            if (line.startsWith('$')) {
+              // GGA: parse fix quality + alt + HDOP
+              if (line.indexOf('GGA') > 1 && line.indexOf('GGA') < 6) {
+                parseNmeaGga(line);
+              }
+              // RMC: parse pos + speed + heading, lalu push ke dashboard
+              if (line.indexOf('RMC') > 1 && line.indexOf('RMC') < 6) {
+                parseNmeaRmc(line);
+                updateDashboard(buildNmeaData());
+              }
             }
           }
         }
@@ -174,108 +372,36 @@
       }
     });
 
-    // Haversine Distance Calculation
+    // -------------------------------------------------------------------------
+    // Distance
+    // -------------------------------------------------------------------------
     function calculateDistance(lat1, lon1, lat2, lon2) {
-      const R = 6371000; // Earth radius in meters
+      const R = 6371000;
       const dLat = (lat2 - lat1) * Math.PI / 180;
       const dLon = (lon2 - lon1) * Math.PI / 180;
-      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-                Math.sin(dLon/2) * Math.sin(dLon/2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      return R * c;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
 
-    function updateDashboard(data) {
-      // Parse Dual-GNSS format or Flat format
-      const baseData = data.base || { lat: basePos[0], lon: basePos[1] };
-      const roverData = data.rover || data;
-
-      // 1. Update Base Station Marker Position
-      basePos = [baseData.lat, baseData.lon];
-      baseMarker.setLatLng(basePos);
-      document.getElementById('txtBaseLat').innerText = baseData.lat.toFixed(7);
-      document.getElementById('txtBaseLon').innerText = baseData.lon.toFixed(7);
-
-      // 2. Update Moving Rover Marker & Trajectory Line
-      const roverPos = [roverData.lat, roverData.lon];
-      roverMarker.setLatLng(roverPos);
-      pathPolyline.addLatLng(roverPos);
-      map.panTo(roverPos);
-
-      // 3. Update Baseline Connection Line (Base -> Rover)
-      baselineLine.setLatLngs([basePos, roverPos]);
-      const baselineDist = calculateDistance(basePos[0], basePos[1], roverPos[0], roverPos[1]);
-      document.getElementById('txtBaselineDist').innerText = baselineDist < 1000 ? 
-        baselineDist.toFixed(2) + ' m' : (baselineDist / 1000).toFixed(2) + ' km';
-
-      // 4. Accumulate Rover Trajectory Distance
-      if (lastPosition) {
-        const dist = calculateDistance(lastPosition[0], lastPosition[1], roverPos[0], roverPos[1]);
-        if (dist > 0.05) { totalDistanceMeters += dist; }
-      }
-      lastPosition = roverPos;
-
-      // Update Info Panel
-      document.getElementById('txtLat').innerText = roverData.lat.toFixed(7);
-      document.getElementById('txtLon').innerText = roverData.lon.toFixed(7);
-      document.getElementById('txtAlt').innerText = (roverData.alt || 0) + ' m';
-      document.getElementById('txtAcc').innerText = (roverData.hAcc_cm || 0) + ' cm';
-      document.getElementById('txtSpeed').innerText = (roverData.speed_kmh || 0) + ' km/h';
-      document.getElementById('txtHeading').innerText = (roverData.heading || 0) + '°';
-      document.getElementById('txtPitch').innerText = (roverData.pitch || 0) + '°';
-      document.getElementById('txtRoll').innerText = (roverData.roll || 0) + '°';
-      document.getElementById('txtDistance').innerText = totalDistanceMeters < 1000 ? 
-        totalDistanceMeters.toFixed(2) + ' m' : (totalDistanceMeters / 1000).toFixed(2) + ' km';
-
-      const fixElem = document.getElementById('txtFix');
-      if (roverData.fix === 4) {
-        fixElem.innerText = 'RTK FIX (1-2 cm)';
-        fixElem.className = 'badge rtk-fix';
-      } else if (roverData.fix === 5) {
-        fixElem.innerText = 'RTK FLOAT (20 cm)';
-        fixElem.className = 'badge rtk-float';
-      } else {
-        fixElem.innerText = 'SINGLE (1.5 m)';
-        fixElem.className = 'badge rtk-single';
-      }
-
-      // Record Data Log
-      if (isRecording) {
-        recordedLogs.push({
-          timestamp: new Date().toISOString(),
-          baseLat: baseData.lat,
-          baseLon: baseData.lon,
-          roverLat: roverData.lat,
-          roverLon: roverData.lon,
-          alt: roverData.alt || 0,
-          fix: roverData.fix || 0,
-          hAcc_cm: roverData.hAcc_cm || 0,
-          speed_kmh: roverData.speed_kmh || 0,
-          heading: roverData.heading || 0,
-          pitch: roverData.pitch || 0,
-          roll: roverData.roll || 0,
-          baselineDist_m: baselineDist.toFixed(2)
-        });
-        document.getElementById('txtPointCount').innerText = recordedLogs.length + ' pts';
-      }
-    }
-
-    // Recording Controls
-    const btnRecord = document.getElementById('btnRecord');
-    btnRecord.addEventListener('click', () => {
+    // -------------------------------------------------------------------------
+    // Recording
+    // -------------------------------------------------------------------------
+    document.getElementById('btnRecord').addEventListener('click', () => {
       isRecording = !isRecording;
+      const btn = document.getElementById('btnRecord');
       if (isRecording) {
-        btnRecord.innerText = '⏹️ Stop Recording';
-        btnRecord.classList.add('recording');
+        btn.innerText = '⏹️ Stop Recording';
+        btn.classList.add('recording');
       } else {
-        btnRecord.innerText = '🔴 Mulai Record';
-        btnRecord.classList.remove('recording');
+        btn.innerText = '🔴 Mulai Record';
+        btn.classList.remove('recording');
       }
     });
 
     document.getElementById('btnClear').addEventListener('click', () => {
-      if (confirm('Bersihkan lintasan peta dan data log terrekam?')) {
+      if (confirm('Bersihkan lintasan peta dan data log?')) {
         pathPolyline.setLatLngs([]);
         recordedLogs = [];
         totalDistanceMeters = 0;
@@ -285,67 +411,40 @@
       }
     });
 
-    // Helper Download File
+    // -------------------------------------------------------------------------
+    // Export
+    // -------------------------------------------------------------------------
     function downloadFile(content, fileName, mimeType) {
       const blob = new Blob([content], { type: mimeType });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName;
-      a.click();
+      a.href = url; a.download = fileName; a.click();
       URL.revokeObjectURL(url);
     }
 
-    // CSV Exporter
     document.getElementById('btnExportCSV').addEventListener('click', () => {
-      if (recordedLogs.length === 0) return alert('Belum ada data log terrekam!');
-      let csv = 'Timestamp,Base_Lat,Base_Lon,Rover_Lat,Rover_Lon,Altitude_m,Fix_Status,hAcc_cm,Speed_kmh,Heading_deg,Pitch_deg,Roll_deg,Baseline_Dist_m\n';
+      if (recordedLogs.length === 0) return alert('Belum ada data log!');
+      let csv = 'Timestamp,Base_Lat,Base_Lon,Rover_Lat,Rover_Lon,Alt_m,Fix,Speed_kmh,Heading_deg,BaselineDist_m\n';
       recordedLogs.forEach(r => {
-        csv += `${r.timestamp},${r.baseLat},${r.baseLon},${r.roverLat},${r.roverLon},${r.alt},${r.fix},${r.hAcc_cm},${r.speed_kmh},${r.heading},${r.pitch},${r.roll},${r.baselineDist_m}\n`;
+        csv += `${r.timestamp},${r.baseLat},${r.baseLon},${r.roverLat},${r.roverLon},${r.alt},${r.fix},${r.speed_kmh},${r.heading},${r.baselineDist_m}\n`;
       });
-      downloadFile(csv, `Coastal_Driffter_DualGNSS_Log_${Date.now()}.csv`, 'text/csv');
+      downloadFile(csv, `Coastal_Driffter_Log_${Date.now()}.csv`, 'text/csv');
     });
 
-    // GPX Exporter
     document.getElementById('btnExportGPX').addEventListener('click', () => {
-      if (recordedLogs.length === 0) return alert('Belum ada data log terrekam!');
-      let gpx = `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="Coastal Driffter Dashboard" xmlns="http://www.topografix.com/GPX/1/1">
-  <trk>
-    <name>Coastal Driffter Track</name>
-    <trkseg>\n`;
+      if (recordedLogs.length === 0) return alert('Belum ada data log!');
+      let gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Coastal Driffter" xmlns="http://www.topografix.com/GPX/1/1">\n  <trk><name>Coastal Driffter Track</name><trkseg>\n`;
       recordedLogs.forEach(r => {
-        gpx += `      <trkpt lat="${r.roverLat}" lon="${r.roverLon}">
-        <ele>${r.alt}</ele>
-        <time>${r.timestamp}</time>
-      </trkpt>\n`;
+        gpx += `      <trkpt lat="${r.roverLat}" lon="${r.roverLon}"><ele>${r.alt}</ele><time>${r.timestamp}</time></trkpt>\n`;
       });
-      gpx += `    </trkseg>
-  </trk>
-</gpx>`;
+      gpx += `    </trkseg></trk>\n</gpx>`;
       downloadFile(gpx, `Coastal_Driffter_Track_${Date.now()}.gpx`, 'application/gpx+xml');
     });
 
-    // KML Exporter
     document.getElementById('btnExportKML').addEventListener('click', () => {
-      if (recordedLogs.length === 0) return alert('Belum ada data log terrekam!');
+      if (recordedLogs.length === 0) return alert('Belum ada data log!');
       let coordsStr = recordedLogs.map(r => `${r.roverLon},${r.roverLat},${r.alt}`).join(' ');
-      let kml = `<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2">
-  <Document>
-    <name>Coastal Driffter Track</name>
-    <Style id="redLine">
-      <LineStyle><color>ff00c6ff</color><width>4</width></LineStyle>
-    </Style>
-    <Placemark>
-      <name>Trajectory Path</name>
-      <styleUrl>#redLine</styleUrl>
-      <LineString>
-        <coordinates>${coordsStr}</coordinates>
-      </LineString>
-    </Placemark>
-  </Document>
-</kml>`;
+      let kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n  <Document><name>Coastal Driffter Track</name>\n    <Style id="redLine"><LineStyle><color>ff00c6ff</color><width>4</width></LineStyle></Style>\n    <Placemark><name>Trajectory Path</name><styleUrl>#redLine</styleUrl>\n      <LineString><coordinates>${coordsStr}</coordinates></LineString>\n    </Placemark>\n  </Document>\n</kml>`;
       downloadFile(kml, `Coastal_Driffter_Track_${Date.now()}.kml`, 'application/vnd.google-earth.kml+xml');
     });
   </script>
