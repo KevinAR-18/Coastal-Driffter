@@ -4,6 +4,24 @@
 // ============================================================================
 // COASTAL DRIFFTER - ROVER FIRMWARE (ZED-F9P Native UBX Parser + IMU Telemetry)
 // ============================================================================
+// STATUS: REFERENSI FASE 8 — JANGAN DI-UPLOAD UNTUK SETUP SAAT INI.
+//
+// Socket XBee simpleRTK2B tersambung ke UART2 ZED-F9P, sehingga Rover TIDAK
+// butuh MCU: ZED-F9P menerima RTCM3 dan mengirim UBX lewat UART2 yang sama.
+// Setup aktif hanya memakai Arduino_Base/Arduino_Base.ino.
+//
+// File ini baru relevan kalau IMU (pitch/roll) jadi dibutuhkan. Konsekuensinya
+// ada modifikasi HARDWARE yang wajib dilakukan lebih dulu:
+//
+//   Di board Rover, net XBee DIN sudah didrive oleh ZED-F9P TX2. Kalau Arduino
+//   ikut drive net yang sama, ada DUA driver berebut satu net — tidak reliabel
+//   dan berpotensi merusak pin. Jalur ZED-F9P TX2 -> XBee DIN harus DIPUTUS
+//   dulu (Rover hanya perlu MENERIMA RTCM3 di UART2), baru Arduino boleh
+//   drive XBee DIN.
+//
+// Keuntungan pindah ke TelemetryPacket: 31 B/s @1 Hz vs raw UBX 172 B/s —
+// melegakan bandwidth radio secara signifikan di baseline >5 km.
+//
 // HW Serial (pin 0=RX, 1=TX): Terhubung ke simpleRTK2B Rover ZED-F9P
 // SoftwareSerial (pin 2=RX, 8=TX): Terhubung ke XBee Radio Telemetry
 // ============================================================================
@@ -28,8 +46,8 @@ struct TelemetryPacket {
   uint16_t heading_01deg;  // 0.1 deg
   int16_t  pitch_01deg;   // 0.1 deg IMU Pitch
   int16_t  roll_01deg;    // 0.1 deg IMU Roll
-  int16_t  rel_N_cm;      // cm Baseline North
-  int16_t  rel_E_cm;      // cm Baseline East
+  int32_t  rel_N_cm;      // cm Baseline North (int32: int16 overflow di +-327 m)
+  int32_t  rel_E_cm;      // cm Baseline East
   uint8_t  checksum;
 };
 #pragma pack(pop)
@@ -100,24 +118,22 @@ void parseUbxPayload(uint8_t uClass, uint8_t uId, uint8_t *payload, uint16_t len
     telePacket.lon = parseLong(&payload[24]);       // Deg * 1e7
     telePacket.lat = parseLong(&payload[28]);       // Deg * 1e7
     telePacket.alt_mm = parseLong(&payload[36]);    // Height MSL mm
-    telePacket.h_acc_mm = (uint16_t)(parseULong(&payload[40]) & 0xFFFF); // hAcc mm
+    uint32_t hAcc = parseULong(&payload[40]);       // hAcc mm (4 byte penuh)
+    telePacket.h_acc_mm = (hAcc > 65535UL) ? 65535U : (uint16_t)hAcc;  // saturasi, bukan wrap
 
     int32_t gSpeed_mms = parseLong(&payload[60]);   // Ground Speed mm/s
     int32_t headMot_1e5 = parseLong(&payload[64]);  // Heading Motion 1e-5 deg
 
-    // Konversi Kecepatan & Heading
-    telePacket.speed_01kmh = (uint16_t)((gSpeed_mms * 36) / 10000); // mm/s -> 0.1 km/h
+    // mm/s -> 0.1 km/h: x3.6/1000 x10 = /27.78. Pembagi 10000 (versi lama) salah 10x.
+    telePacket.speed_01kmh = (uint16_t)((gSpeed_mms * 36) / 1000);
     int32_t head01 = headMot_1e5 / 10000;
     if (head01 < 0) head01 += 3600;
     telePacket.heading_01deg = (uint16_t)(head01 % 3600);
   }
   // UBX-NAV-RELPOSNED (Class 0x01, ID 0x3C, Panjang Payload minimal 40 byte)
   else if (uClass == 0x01 && uId == 0x3C && len >= 40) {
-    int32_t relN_cm = parseLong(&payload[8]);   // relPosN cm
-    int32_t relE_cm = parseLong(&payload[12]);  // relPosE cm
-
-    telePacket.rel_N_cm = (int16_t)constrain(relN_cm, -32767, 32767);
-    telePacket.rel_E_cm = (int16_t)constrain(relE_cm, -32767, 32767);
+    telePacket.rel_N_cm = parseLong(&payload[8]);   // relPosN cm
+    telePacket.rel_E_cm = parseLong(&payload[12]);  // relPosE cm
   }
 }
 
@@ -127,8 +143,11 @@ void processIncomingByteUBX(uint8_t c) {
       if (c == 0xB5) ubxState = UBX_WAIT_SYNC2;
       break;
     case UBX_WAIT_SYNC2:
-      if (c == 0x62) ubxState = UBX_WAIT_CLASS;
-      else ubxState = UBX_WAIT_SYNC1;
+      // 0xB5 beruntun tetap kandidat sync1, supaya satu byte nyasar tidak
+      // membuang frame valid di belakangnya.
+      if (c == 0x62)      ubxState = UBX_WAIT_CLASS;
+      else if (c == 0xB5) ubxState = UBX_WAIT_SYNC2;
+      else                ubxState = UBX_WAIT_SYNC1;
       break;
     case UBX_WAIT_CLASS:
       ubxClass = c;
@@ -204,8 +223,10 @@ void loop() {
     processIncomingByteUBX(b);
   }
 
-  // 3. Uplink Telemetry Packet ke Base Station (5 Hz = 200 ms)
-  if (millis() - lastSendTime >= 200) {
+  // 3. Uplink Telemetry Packet ke Base Station (1 Hz)
+  //    Dibatasi 1 Hz, bukan 5 Hz: link long-range >5 km sudah dipakai RTCM3
+  //    downlink di radio half-duplex yang sama.
+  if (millis() - lastSendTime >= 1000) {
     lastSendTime = millis();
 
     readImuSensors();

@@ -54,6 +54,9 @@
     .stat-row b { color: var(--text-main); font-family: monospace; font-size: 14px; }
     .baud-select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.06); color: var(--text-main); font-size: 13px; margin-bottom: 10px; }
     .baud-select:focus { outline: none; border-color: var(--accent-blue); }
+    .follow-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); margin-bottom: 12px; cursor: pointer; }
+    .link-stale { background: #64748b; }
+    .marker-stale { opacity: 0.35; }
   </style>
 </head>
 <body>
@@ -64,9 +67,10 @@
 
     <select id="selBaud" class="baud-select">
       <option value="38400" selected>Baud 38400 (NMEA Rover)</option>
-      <option value="38400">Baud 115200 (JSON Base)</option>
+      <option value="115200">Baud 115200 (JSON Base)</option>
     </select>
     <button id="btnConnect" class="btn btn-primary">🔌 Hubungkan ke Serial</button>
+    <label class="follow-toggle"><input type="checkbox" id="chkFollow" checked> Auto-follow Rover</label>
 
     <div id="sectionRecord" class="btn-group">
       <button id="btnRecord" class="btn btn-record">🔴 Mulai Record</button>
@@ -91,8 +95,8 @@
 
     <div class="stat-section" id="sectionBase">
       <div class="section-title">📌 Posisi Base Station</div>
-      <div class="stat-row"><span>Base Lat:</span><b id="txtBaseLat">-6.1753924</b></div>
-      <div class="stat-row"><span>Base Lon:</span><b id="txtBaseLon">106.8271532</b></div>
+      <div class="stat-row"><span>Base Lat:</span><b id="txtBaseLat">-</b></div>
+      <div class="stat-row"><span>Base Lon:</span><b id="txtBaseLon">-</b></div>
     </div>
 
     <div class="stat-section">
@@ -129,6 +133,9 @@
     let lastPosition = null;
     let useNmeaMode = false;
     let firstFix = false;
+    let lastPacketTime = 0;
+    let staleTimer = null;
+    const STALE_MS = 3000;
 
     // Store latest NMEA state (RMC gives pos/speed/heading, GGA gives fix/alt/hAcc)
     let nmeaState = { lat: 0, lon: 0, alt: 0, fix: 0, hAcc_m: 0, speed_kmh: 0, heading: 0 };
@@ -205,10 +212,39 @@
       };
     }
 
+    // -------------------------------------------------------------------------
+    // LINK STALENESS — di baseline >5 km radio akan sering drop.
+    // Tanpa indikator ini, "Rover diam" dan "radio putus" tampak identik.
+    // -------------------------------------------------------------------------
+    function setMarkerStale(stale) {
+      if (!roverMarker) return;
+      const el = roverMarker.getElement();
+      if (el) el.classList.toggle('marker-stale', stale);
+    }
+
+    function markLinkAlive() {
+      setMarkerStale(false);
+      if (staleTimer) clearTimeout(staleTimer);
+      staleTimer = setTimeout(() => {
+        const fixElem = document.getElementById('txtFix');
+        fixElem.innerText = 'LINK LOST';
+        fixElem.className = 'badge link-stale';
+        setMarkerStale(true);
+      }, STALE_MS);
+    }
+
     function updateDashboard(data) {
       const baseData = data.base || { lat: 0, lon: 0 };
       const roverData = data.rover || data;
-      const hasBase = !!data.base;
+      // base_valid=false berarti Base belum dikonfigurasi Fixed Mode — jangan plot titik palsu
+      const hasBase = !!data.base && data.base.valid !== 0 && data.base.valid !== false;
+
+      // Paket Rover tanpa fix belum punya koordinat valid — jangan plot 0,0 di Teluk Guinea
+      if (!Number.isFinite(roverData.lat) || !Number.isFinite(roverData.lon)) return;
+      if (roverData.lat === 0 && roverData.lon === 0) return;
+
+      lastPacketTime = Date.now();
+      markLinkAlive();
 
       let gBasePos = hasBase ? [baseData.lat, baseData.lon] : [0, 0];
       const roverPos = [roverData.lat, roverData.lon];
@@ -218,16 +254,18 @@
         firstFix = true;
         totalDistanceMeters = 0;
         lastPosition = null;
-        map.setView(roverPos, 18);
         if (hasBase) {
           baseMarker = L.marker(gBasePos).addTo(map).bindPopup('<b>📌 Base Station</b>');
           document.getElementById('sectionBase').style.display = '';
           document.getElementById('rowBaseline').style.display = '';
           document.getElementById('subtitle').innerText = 'Dual-GNSS (Base & Rover)';
+          // Baseline bisa >5 km — fitBounds supaya kedua titik terlihat, bukan zoom 18
+          map.fitBounds(L.latLngBounds([gBasePos, roverPos]).pad(0.2));
         } else {
           document.getElementById('sectionBase').style.display = 'none';
           document.getElementById('rowBaseline').style.display = 'none';
           document.getElementById('subtitle').innerText = 'Rover Tracker';
+          map.setView(roverPos, 18);
         }
         roverMarker = L.marker(roverPos).addTo(map).bindPopup('<b>🚤 Coastal Drifter</b>');
         pathPolyline = L.polyline([], { color: '#38bdf8', weight: 4, opacity: 0.85 }).addTo(map);
@@ -244,7 +282,7 @@
       // Rover marker
       roverMarker.setLatLng(roverPos);
       pathPolyline.addLatLng(roverPos);
-      map.panTo(roverPos);
+      if (document.getElementById('chkFollow').checked) map.panTo(roverPos);
 
       // Baseline
       if (hasBase) {
@@ -275,19 +313,20 @@
       document.getElementById('txtDistance').innerText = totalDistanceMeters < 1000 ?
         totalDistanceMeters.toFixed(2) + ' m' : (totalDistanceMeters / 1000).toFixed(2) + ' km';
 
-      // Fix status
+      // Fix status — label tanpa angka akurasi hardcode.
+      // Di baseline >5 km, "RTK FIX = 1-2 cm" menyesatkan; pakai hAcc aktual di panel.
       const fixElem = document.getElementById('txtFix');
       if (roverData.fix === 4) {
-        fixElem.innerText = 'RTK FIX (1-2 cm)';
+        fixElem.innerText = 'RTK FIX';
         fixElem.className = 'badge rtk-fix';
       } else if (roverData.fix === 5) {
-        fixElem.innerText = 'RTK FLOAT (20 cm)';
+        fixElem.innerText = 'RTK FLOAT';
         fixElem.className = 'badge rtk-float';
       } else if (roverData.fix === 2) {
         fixElem.innerText = 'DGPS';
         fixElem.className = 'badge rtk-float';
       } else if (roverData.fix === 1) {
-        fixElem.innerText = useNmeaMode ? 'SINGLE' : 'SINGLE (1.5 m)';
+        fixElem.innerText = 'SINGLE';
         fixElem.className = 'badge rtk-single';
       } else {
         fixElem.innerText = 'NO FIX';
@@ -424,9 +463,9 @@
 
     document.getElementById('btnExportCSV').addEventListener('click', () => {
       if (recordedLogs.length === 0) return alert('Belum ada data log!');
-      let csv = 'Timestamp,Base_Lat,Base_Lon,Rover_Lat,Rover_Lon,Alt_m,Fix,Speed_kmh,Heading_deg,BaselineDist_m\n';
+      let csv = 'Timestamp,Base_Lat,Base_Lon,Rover_Lat,Rover_Lon,Alt_m,Fix,hAcc_cm,Speed_kmh,Heading_deg,Pitch_deg,Roll_deg,BaselineDist_m\n';
       recordedLogs.forEach(r => {
-        csv += `${r.timestamp},${r.baseLat},${r.baseLon},${r.roverLat},${r.roverLon},${r.alt},${r.fix},${r.speed_kmh},${r.heading},${r.baselineDist_m}\n`;
+        csv += `${r.timestamp},${r.baseLat},${r.baseLon},${r.roverLat},${r.roverLon},${r.alt},${r.fix},${r.hAcc_cm},${r.speed_kmh},${r.heading},${r.pitch},${r.roll},${r.baselineDist_m}\n`;
       });
       downloadFile(csv, `Coastal_Driffter_Log_${Date.now()}.csv`, 'text/csv');
     });

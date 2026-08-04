@@ -39,6 +39,8 @@ Verifikasi bahwa XBee Base dan XBee Rover dapat berkomunikasi via radio 2.4GHz *
 
 ## 4. Upload Firmware
 
+> ⚠️ **Set baud XCTU ke 19200 lebih dulu.** Sketch di repo ini memakai 9600 untuk uji terisolasi, tetapi sistem penuh berjalan di 19200 (lihat `guide.md` §4). Setelah uji ini lolos, pastikan `BD` kedua XBee **19200** sebelum lanjut ke sistem penuh — kalau tidak, link akan tampak mati padahal XBee sehat.
+
 ### Langkah 1: Arduino Base (Sender)
 
 1. Buka file `xbee_test_sender.ino` di Arduino IDE
@@ -156,12 +158,13 @@ Di XCTU: pilih modul → **Update** → pilih firmware terbaru → centang "Eras
 
 Kalau LED Rover berkedip tiap detik, XBee **sudah siap**. Langkah selanjutnya:
 
-1. Kembalikan wiring ke konfigurasi **full system**:
-   - Base: GNSS pin 4,5 + XBee pin 2,8 + USB ke PC
-   - Rover: GNSS langsung ke XBee via shield + baterai
-2. Konfigurasi GNSS di u-center (lihat `guide.md`)
-3. Upload `Arduino_Base.ino`
-4. Buka dashboard pilih **115200**, connect
+1. Set `BD` kedua XBee ke **19200** di XCTU, dan set **RF data rate ke long range**. Catat nilai RF data rate — dipakai untuk verifikasi bandwidth.
+2. Lepas Arduino dari sisi **Rover** — pada sistem penuh, Rover tidak memakai MCU. XBee terpasang di socket simpleRTK2B, tersambung ke UART2 ZED-F9P.
+3. Di **Base**, sambungkan XBee **DOUT → pin 2** Arduino, plus **GND bersama**.
+4. Konfigurasi GNSS di u-center: `guide.md` §3 (Base, dua tahap) dan §4 (Rover).
+5. Isi koordinat Base di `Arduino_Base.ino`, lalu upload.
+6. Buka dashboard, pilih baud **115200**, connect.
+7. Lanjutkan bring-up berlapis di `guide.md` §8 — mulai dari baseline 50 m, jangan langsung jarak target.
 
 ---
 
