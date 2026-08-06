@@ -120,6 +120,10 @@ Lihat LED built-in (pin 13) Arduino Rover:
 
 ## 7. XBee Pairing via XCTU
 
+Panduan koneksi lewat Arduino di bawah ini adalah **opsi darurat** kalau belum
+punya USB adapter. Untuk panduan lengkap XCTU dari Discover Devices sampai
+Range Test: **[xbee_xctu_test.md](xbee_xctu_test.md)**.
+
 ### Install XCTU
 
 1. Download dari: https://www.digi.com/products/embedded-systems/digi-xbee/digi-xbee-tools/xctu

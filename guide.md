@@ -208,6 +208,9 @@ USB Serial Base → Dashboard terpisah: **115200**.
 
 ## 5. XBee SX
 
+> Panduan langkah demi langkah XCTU — dari Discover Devices, Console, Range
+> Test, hingga Recovery: **[xbee_xctu_test.md](xbee_xctu_test.md)**.
+
 XBee dari kit ArduSimple umumnya sudah dipasangkan dari pabrik. Yang **wajib** diubah adalah baud dan mode long-range.
 
 ### Setting di XCTU
